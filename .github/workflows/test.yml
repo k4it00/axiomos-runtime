@@ -1,0 +1,42 @@
+name: AxiomOS CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -e .
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=line
+
+      - name: Check CLI help
+        run: python -m axiomos.cli --help
+
+      - name: Smoke test — version
+        run: python -m axiomos.cli version
+
+      - name: Smoke test — about
+        run: python -m axiomos.cli about
+
+      - name: Smoke test — goal (vague → blocked)
+        run: python -m axiomos.cli goal "do something"
+
+      - name: Smoke test — goal (simple → completes)
+        run: python -m axiomos.cli goal "check python version"

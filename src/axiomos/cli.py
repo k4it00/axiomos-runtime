@@ -23,6 +23,7 @@ from .capability_broker import explain_broker
 from .config import ensure_home, load_config, save_config, get_key, set_key, config_status
 from .setup import run_setup, setup_cloudflare_provider, setup_memory, setup_permissions
 from .about import about_payload, read_doc
+from .goal_shell import GoalShell
 
 def pj(o):
     print(json.dumps(o, indent=2))
@@ -31,6 +32,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="axiom", description="AxiomOS Runtime 1.1 Dev")
     p.add_argument("--version", action="store_true")
     p.add_argument("-q", "--query")
+    p.add_argument("-g", "--goal")
     p.add_argument("--execute", action="store_true")
     p.add_argument("--progress", action="store_true")
     sub = p.add_subparsers(dest="cmd")
@@ -116,6 +118,11 @@ def main(argv=None):
     sp = bs.add_parser("explain"); sp.add_argument("prompt"); sp.add_argument("--workspace", default="."); sp.add_argument("--execute", action="store_true")
     sp = bs.add_parser("providers"); sp.add_argument("--workspace", default=".")
 
+    goal = sub.add_parser("goal", help="Submit a goal through Executive Function lifecycle")
+    goal.add_argument("text", nargs="*")
+    goal.add_argument("--workspace", default=".")
+    goal.add_argument("--execute", action="store_true")
+
     sub.add_parser("drivers")
 
     a = p.parse_args(argv)
@@ -125,6 +132,10 @@ def main(argv=None):
     if a.cmd == "about":
         if a.doc: return print(read_doc(a.doc))
         return pj(about_payload())
+    if a.goal and not a.cmd:
+        gs = GoalShell(workspace=".", memory=MemoryStore("."))
+        result = gs.submit(a.goal, execute=a.execute)
+        return pj(result)
     if a.query and not a.cmd:
         if a.progress or a.execute: print("AxiomOS: routing request...", file=sys.stderr)
         code = run_one_shot(a.query, a.execute)
@@ -221,6 +232,13 @@ def main(argv=None):
         intent = {"goal": a.prompt, "domain": route["domain"], "required_packages": route["packages"], "required_capabilities": tuple(sorted(set([route["domain"]] + route["packages"] + route["verification"]))), "risk": route["risk"], "quality_target": route["quality_target"], "constraints": ("dry_run",) if dry_run else ("execution_unlocked",)}
         return pj(explain_broker(a.prompt, route, intent, workspace=a.workspace, dry_run=dry_run))
     if a.cmd == "drivers": return pj({"drivers": DriverRegistry().list()})
+
+    if a.cmd == "goal":
+        gs = GoalShell(workspace=a.workspace, memory=MemoryStore(a.workspace))
+        text = " ".join(a.text) if a.text else ""
+        if not text:
+            return pj({"status": "error", "message": "Goal text is required. Usage: axiom goal <your goal>"})
+        return pj(gs.submit(text, execute=a.execute))
 
 if __name__ == "__main__":
     main()

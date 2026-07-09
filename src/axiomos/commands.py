@@ -10,6 +10,7 @@ from .packages import PackageRegistry
 from .tools import ToolRequest, execute_tool, ToolRegistry, parse_tool_name, tool_doctor
 from .permissions import permission_catalog
 from .about import about_payload, read_doc
+from .goal_shell import GoalShell
 def dispatch_line(line,session:AxiomSession):
     s=line.strip()
     if not s: return {"status":"noop"}
@@ -55,4 +56,8 @@ def dispatch_line(line,session:AxiomSession):
         if args: return {"status":"ok","doc":read_doc(args[0])}
         return {"status":"ok","about":about_payload(session.workspace)}
     if cmd=="/last": return {"status":"ok","last":session.last}
+    if cmd=="/goal" and args:
+        gs=GoalShell(workspace=session.workspace, memory=MemoryStore(session.workspace))
+        goal_text=" ".join(args)
+        return {"status":"ok","result":gs.submit(goal_text)}
     return {"status":"error","message":f"Unknown command: {cmd}"}
