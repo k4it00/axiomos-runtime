@@ -1,0 +1,5 @@
+def route_prompt(prompt):
+    t=prompt.lower()
+    if any(k in t for k in ('android','ios','apk','capacitor','microphone','permission')): return {'prompt':prompt,'domain':'mobile','mode':'balanced','packages':['mobile','engineering'],'risk':'medium','quality_target':'high','verification':['device smoke test','permission flow review'],'bundle_targets':['AX-CONF-007'],'rationale':'Mobile task route.'}
+    if any(k in t for k in ('axiomos','kernel','runtime','cognitive','architecture','loop')): return {'prompt':prompt,'domain':'axiomos_architecture','mode':'max-quality','packages':['ai_agents','engineering','writing'],'risk':'high','quality_target':'very_high','verification':['conformance check','spec mapping'],'bundle_targets':['AX-CONF-001'],'rationale':'AxiomOS route.'}
+    return {'prompt':prompt,'domain':'general_route','mode':'balanced','packages':['writing'],'risk':'low','quality_target':'good','verification':['light review'],'bundle_targets':['AX-CONF-002'],'rationale':'General route.'}

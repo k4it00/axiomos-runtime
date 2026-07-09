@@ -1,0 +1,19 @@
+name: android
+version: 0.1.0
+description: Android debugging and APK workflow package
+capabilities:
+  - android_debug
+  - apk_build
+  - permission_analysis
+commands:
+  - android.doctor
+  - android.inspect_permissions
+drivers:
+  - adb
+  - gradle
+permissions:
+  - filesystem
+  - shell_limited
+policies:
+  - no_secret_write
+  - human_gate_for_publish

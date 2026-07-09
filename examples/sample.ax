@@ -1,0 +1,29 @@
+AXIOM 0.2
+
+META
+    title: "Android mic regression"
+
+GOAL G1 "Diagnose Android microphone regression"
+
+SUCCESS S1 "Likely cause and verification plan identified"
+
+FACT F1 "Keyboard dictation works but in-app mic does not"
+    evidence: G1
+
+TASK T1 "Check Android permission flow"
+    owner: mobile-package
+
+TASK T2 "Check voice loop state machine"
+    owner: engineering-package
+    depends_on: [T1]
+
+VERIFY V1 "Run real-device or emulator smoke test"
+    required: true
+
+RISK R1 "UI-only fix may hide native permission issue"
+    severity: medium
+    mitigation: V1
+
+EDGE G1 -> T1 "decomposes_to"
+EDGE T1 -> T2 "enables"
+EDGE T2 -> V1 "verified_by"

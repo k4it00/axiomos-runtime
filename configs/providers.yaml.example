@@ -1,0 +1,19 @@
+active_provider: null
+provider_pools:
+  cloudflare:
+    strategy: first_available
+    providers:
+      - name: cf_p26
+        type: openai_compatible
+        enabled: true
+        base_url: https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID_P26}/ai/v1
+        api_key_ref: env:CLOUDFLARE_API_TOKEN_P26
+        model: "@cf/meta/llama-3.2-3b-instruct"
+        capabilities: [general, writing, mobile, engineering, ai_agents, research, security, axiomos_architecture, general_route]
+  local:
+    strategy: first_available
+    providers:
+      - name: dry_run
+        type: dry_run
+        enabled: true
+        capabilities: [general, writing, mobile, engineering, ai_agents, research, trading, security, axiomos_architecture, general_route]

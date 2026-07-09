@@ -1,0 +1,19 @@
+active_provider: null
+provider_pools:
+  local:
+    strategy: first_available
+    providers:
+    - name: dry_run
+      type: dry_run
+      enabled: true
+      capabilities:
+      - general
+      - writing
+      - mobile
+      - engineering
+      - ai_agents
+      - research
+      - trading
+      - security
+      - axiomos_architecture
+      - general_route

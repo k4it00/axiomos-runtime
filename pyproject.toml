@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "axiomos-runtime"
+version = "1.1.0.dev0"
+description = "AxiomOS Runtime 1.1 Dev — Hermes-style setup and config"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pyyaml>=6.0"]
+
+[project.optional-dependencies]
+providers = ["requests>=2.31"]
+
+[project.scripts]
+axiom = "axiomos.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
