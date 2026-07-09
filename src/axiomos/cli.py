@@ -24,6 +24,7 @@ from .config import ensure_home, load_config, save_config, get_key, set_key, con
 from .setup import run_setup, setup_cloudflare_provider, setup_memory, setup_permissions
 from .about import about_payload, read_doc
 from .goal_shell import GoalShell
+from . import skillopt_engine as so
 
 def pj(o):
     print(json.dumps(o, indent=2))
@@ -124,6 +125,31 @@ def main(argv=None):
     goal.add_argument("--execute", action="store_true")
 
     sub.add_parser("drivers")
+
+    # ── SkillOpt train subcommand ──
+    train = sub.add_parser("train", help="SkillOpt self-optimization for AxiomOS artifacts")
+    ts = train.add_subparsers(dest="train_cmd", required=True)
+    sp = ts.add_parser("status", help="Show training session status")
+    sp = ts.add_parser("epoch", help="Run one full training epoch")
+    sp.add_argument("--tasks", type=str, nargs="+", default=[], help="Training tasks")
+    sp.add_argument("--held-out", type=str, nargs="*", default=None, help="Held-out evaluation tasks")
+    sp.add_argument("--target", choices=["constitution", "config", "skill"], default="constitution")
+    sp.add_argument("--learning-rate", type=int, default=2, help="Max edits per epoch")
+    sp.add_argument("--workspace", default=".")
+    sp = ts.add_parser("rollout", help="Execute a batch of trial tasks")
+    sp.add_argument("--tasks", type=str, nargs="+", required=True)
+    sp.add_argument("--target", choices=["constitution", "config", "skill"], default="constitution")
+    sp.add_argument("--epoch", type=int, default=1)
+    sp = ts.add_parser("reflect", help="Analyze trial results")
+    sp.add_argument("--trials", type=str, help="Path to trials JSON file")
+    sp.add_argument("--epoch", type=int, default=1)
+    sp = ts.add_parser("edit", help="Propose bounded edits based on findings")
+    sp.add_argument("--target", choices=["constitution", "config", "skill"], default="constitution")
+    sp.add_argument("--findings", type=str, nargs="*", default=[])
+    sp.add_argument("--learning-rate", type=int, default=2)
+    sp = ts.add_parser("validate", help="Validate a staged edit")
+    sp.add_argument("--edit", type=str, help="Edit JSON file path")
+    sp.add_argument("--held-out", type=str, nargs="+", required=True)
 
     a = p.parse_args(argv)
 
@@ -239,6 +265,51 @@ def main(argv=None):
         if not text:
             return pj({"status": "error", "message": "Goal text is required. Usage: axiom goal <your goal>"})
         return pj(gs.submit(text, execute=a.execute))
+
+    # ── SkillOpt train dispatcher ──
+    if a.cmd == "train":
+        if a.train_cmd == "status":
+            return pj(so.cmd_status())
+        if a.train_cmd == "epoch":
+            # Create a GoalShell for live scoring if we can
+            try:
+                gs = GoalShell(workspace=a.workspace)
+            except Exception:
+                gs = None
+            return pj(so.cmd_train(
+                tasks=a.tasks,
+                held_out=a.held_out,
+                target=a.target,
+                learning_rate=a.learning_rate,
+                goal_shell=gs,
+            ))
+        if a.train_cmd == "rollout":
+            results = so.cmd_rollout(
+                tasks=a.tasks,
+                target=a.target,
+                epoch=a.epoch,
+            )
+            return pj({"trials": results})
+        if a.train_cmd == "reflect":
+            if a.trials:
+                with open(a.trials) as f:
+                    trials = json.load(f).get("trials", [])
+            else:
+                trials = []
+            return pj(so.cmd_reflect(trials, epoch=a.epoch))
+        if a.train_cmd == "edit":
+            return pj({"proposals": so.cmd_edit(
+                target=a.target,
+                findings=a.findings,
+                learning_rate=a.learning_rate,
+            )})
+        if a.train_cmd == "validate":
+            if a.edit:
+                with open(a.edit) as f:
+                    edit_data = json.load(f)
+            else:
+                return pj({"error": "No edit file provided"})
+            return pj(so.cmd_validate(edit_data, a.held_out))
 
 if __name__ == "__main__":
     main()

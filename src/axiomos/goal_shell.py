@@ -18,6 +18,7 @@ from .hypervisor import run_prompt
 from .memory import MemoryStore
 from .receipts import make_receipt, show_receipt
 from .config import load_config
+from . import skillopt_engine as so
 
 
 class GoalShell:
@@ -119,6 +120,30 @@ class GoalShell:
 
     def active_count(self) -> int:
         return len(self._active_goals)
+
+    # ── SkillOpt training ─────────────────────────────────────────────────
+
+    def train(
+        self,
+        tasks: list[str],
+        target: str = "constitution",
+        held_out: list[str] | None = None,
+        learning_rate: int = 2,
+    ) -> dict[str, Any]:
+        """
+        Run one SkillOpt training epoch through GoalShell.
+
+        Routes training tasks through the existing EF + hypervisor pipeline
+        to collect rollout data, then reflects, edits, and validates.
+        """
+        target_kind = so.TargetKind(target)
+        loop = so.SkillOptLoop(target=target_kind, learning_rate=learning_rate)
+        loop.set_training_tasks(tasks)
+        if held_out:
+            loop.set_held_out_tasks(held_out)
+
+        epoch_result = loop.run_epoch(goal_shell=self)
+        return epoch_result.to_dict()
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
