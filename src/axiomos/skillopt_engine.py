@@ -26,6 +26,14 @@ from typing import Any, Callable, Literal
 import json, os, random, re, shutil, subprocess, sys, uuid
 
 
+def _fmt_float(val, default: str = "?") -> str:
+    """Format a value as fixed-decimal string, or return default if non-numeric."""
+    try:
+        return f"{float(val):.2f}"
+    except (TypeError, ValueError):
+        return default
+
+
 # ─── Constants ───────────────────────────────────────────────────────────────
 
 CONSTITUTION_PATH = Path(__file__).parent.parent.parent / "CONSTITUTION.md"
@@ -270,16 +278,18 @@ def write_config_value(key: str, value: Any) -> None:
         json.dump(current, f, indent=2)
 
 
-def read_skill_doc() -> str:
-    """Read the axiomos-ef skill document (if reachable)."""
-    skill_path = (
-        Path.home()
-        / ".hermes"
-        / "skills"
-        / "software-development"
-        / "axiomos-ef"
-        / "SKILL.md"
-    )
+def read_skill_doc(skill_name: str = "axiomos-ef") -> str:
+    """Read a Hermes skill document by name.
+
+    Defaults to 'axiomos-ef' (software-development/axiomos-ef/SKILL.md).
+    Also supports 'axiomos' (productivity/axiomos/SKILL.md).
+    """
+    skill_map = {
+        "axiomos-ef": "software-development/axiomos-ef",
+        "axiomos": "productivity/axiomos",
+    }
+    rel_path = skill_map.get(skill_name, skill_name)
+    skill_path = Path.home() / ".hermes" / "skills" / rel_path / "SKILL.md"
     if skill_path.exists():
         return skill_path.read_text()
     return ""
@@ -308,6 +318,20 @@ class TaskScorer:
         trial_id = f"t_{uuid.uuid4().hex[:8]}"
         start = datetime.now(timezone.utc)
 
+        # Pre-compute EF frame for trajectory in ALL modes
+        from .executive_function import ExecutiveFunction
+
+        ef = ExecutiveFunction()
+        frame = ef.frame_goal(task)
+        frame_deets = frame.frame if hasattr(frame, "frame") else {}
+        trajectory = [
+            f"EF: action={frame.action.value}",
+            f"EF: complexity={_fmt_float(frame_deets.get('complexity'))}",
+            f"EF: risk={frame_deets.get('risk','?')}",
+            f"EF: vagueness={_fmt_float(frame_deets.get('vagueness'))}",
+            f"EF: reasoning={frame.reasoning[0] if frame.reasoning else 'none'}",
+        ]
+
         if goal_shell:
             try:
                 result = goal_shell.submit(task, execute=True)
@@ -315,19 +339,7 @@ class TaskScorer:
             except Exception as e:
                 score, success, output, error = 0.0, False, "", str(e)
         else:
-            # Dry-run mode — use heuristic scoring, capture trajectory from EF
-            from .executive_function import ExecutiveFunction
-
-            ef = ExecutiveFunction()
-            frame = ef.frame_goal(task)
-            frame_deets = frame.frame if hasattr(frame, "frame") else {}
-            trajectory = [
-                f"EF: action={frame.action.value}",
-                f"EF: complexity={frame_deets.get('complexity','?'):.2f}",
-                f"EF: risk={frame_deets.get('risk','?')}",
-                f"EF: vagueness={frame_deets.get('vagueness','?'):.2f}",
-                f"EF: reasoning={frame.reasoning[0] if frame.reasoning else 'none'}",
-            ]
+            # Dry-run mode — pre-computed EF frame avoids double evaluation
             score, success, output, error = self._score_heuristic(task, ef_frame=frame)
 
         duration = (datetime.now(timezone.utc) - start).total_seconds() * 1000
@@ -339,7 +351,7 @@ class TaskScorer:
             duration_ms=duration,
             output=output[:2000] if output else "",
             error=error,
-            trajectory=trajectory if not goal_shell else [],
+            trajectory=trajectory,
         )
 
     def _score_result(self, task: str, result: dict) -> tuple[float, bool, str, str | None]:
@@ -466,7 +478,7 @@ class ReflectionEngine:
         Analyze a batch of trial results.
 
         Returns a TrainingEpoch with:
-          - findings: list of actionable insights
+          - findings: list of actionable insights (from keyword rules + optional LLM)
           - avg_score / best_score
           - Classification of success vs failure patterns
         """
@@ -476,10 +488,44 @@ class ReflectionEngine:
         scores = [t.score for t in trials]
         avg_score = sum(scores) / len(scores)
         best_score = max(scores)
+
+        # Keyword-based findings (fast, always runs)
+        findings = self._keyword_findings(trials, avg_score, scores)
+
+        # LLM-enriched findings (optional, best-effort)
+        llm_findings = self._llm_findings(trials, avg_score, epoch)
+        if llm_findings:
+            # De-duplicate: skip LLM findings too similar to keyword ones
+            all_text = " ".join(findings).lower()
+            for lf in llm_findings:
+                if not any(self._is_similar(lf, f) for f in findings):
+                    findings.append(lf)
+
+        return TrainingEpoch(
+            epoch=epoch,
+            trials=trials,
+            findings=findings,
+            avg_score=avg_score,
+            best_score=best_score,
+            meta_guidance=self._generate_meta_guidance(findings, avg_score, epoch),
+        )
+
+    def _is_similar(self, a: str, b: str, threshold: float = 0.6) -> bool:
+        """Rough overlap check — are two finding strings saying the same thing?"""
+        a_words = set(a.lower().split())
+        b_words = set(b.lower().split())
+        if not a_words or not b_words:
+            return False
+        overlap = len(a_words & b_words) / max(len(a_words), len(b_words))
+        return overlap >= threshold
+
+    def _keyword_findings(
+        self, trials: list[TrialResult], avg_score: float, scores: list[float]
+    ) -> list[str]:
+        """Keyword-based pattern detection — fast, always runs."""
+        findings = []
         successes = [t for t in trials if t.success]
         failures = [t for t in trials if not t.success]
-
-        findings = []
 
         # Pattern: what kinds of tasks fail?
         if failures:
@@ -523,14 +569,54 @@ class ReflectionEngine:
                     f"performance outliers: {[s.task[:50] for s in slow]}"
                 )
 
-        return TrainingEpoch(
-            epoch=epoch,
-            trials=trials,
-            findings=findings,
-            avg_score=avg_score,
-            best_score=best_score,
-            meta_guidance=self._generate_meta_guidance(findings, avg_score, epoch),
-        )
+        return findings
+
+    def _llm_findings(
+        self, trials: list[TrialResult], avg_score: float, epoch: int
+    ) -> list[str]:
+        """Best-effort LLM reflection for richer findings.
+
+        Uses llm-query.py if available; silently falls back to empty list.
+        """
+        try:
+            import json
+            import subprocess
+
+            summary_lines = [f"Epoch {epoch} — avg_score {avg_score:.2f}:"]
+            for t in trials:
+                summary_lines.append(
+                    f"  - task={t.task!r} score={t.score} success={t.success}"
+                    f" trajectory={'; '.join(t.trajectory[-3:])}"
+                )
+
+            prompt = (
+                "Analyze these SkillOpt training trials and suggest 1-3 "
+                "actionable findings (one per line, concise). "
+                "Focus on: scoring patterns, EF decision quality, "
+                "constitutional rule gaps, and config tuning opportunities.\n\n"
+                + "\n".join(summary_lines)
+            )
+
+            result = subprocess.run(
+                ["python3", str(Path.home() / ".hermes/scripts/llm-query.py"),
+                 prompt, "--task", "analysis", "--raw"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                return []
+
+            resp = json.loads(result.stdout)
+            text = resp.get("response", "")
+            if not text:
+                return []
+
+            return [line.strip().lstrip("-•* ") for line in text.split("\n")
+                    if line.strip() and len(line.strip()) > 10]
+
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+        except Exception:
+            return []
 
     def _generate_meta_guidance(
         self, findings: list[str], avg_score: float, epoch: int
@@ -749,9 +835,9 @@ class EditProposer:
     def _propose_skill_edits(
         self, findings: list[str], used: int
     ) -> list[BoundedEdit]:
-        """Generate edits for the axiomos-ef SKILL.md."""
+        """Generate edits for the axiomos-ef or axiom-os SKILL.md."""
         proposals = []
-        skill_text = read_skill_doc()
+        skill_text = read_skill_doc("axiomos-ef")
 
         for finding in findings:
             if "vague" in finding.lower():
@@ -871,6 +957,7 @@ class EditApplier:
             # Append new rule (re-numbered by write_constitution)
             rules.append(edit.new_value)
             write_constitution(rules)
+            EditApplier._sync_constitution_to_skill(rules)
             return True
 
         elif edit.action == EditAction.DELETE:
@@ -881,10 +968,12 @@ class EditApplier:
                 if 0 <= idx < len(rules):
                     rules.pop(idx)
                     write_constitution(rules)
+                    EditApplier._sync_constitution_to_skill(rules)
                     return True
             # Try text match
             rules = [r for r in rules if edit.old_value not in r]
             write_constitution(rules)
+            EditApplier._sync_constitution_to_skill(rules)
             return True
 
         elif edit.action == EditAction.REPLACE:
@@ -894,15 +983,77 @@ class EditApplier:
                 if 0 <= idx < len(rules):
                     rules[idx] = edit.new_value
                     write_constitution(rules)
+                    EditApplier._sync_constitution_to_skill(rules)
                     return True
             # Try text match
             rules = [
                 edit.new_value if edit.old_value in r else r for r in rules
             ]
             write_constitution(rules)
+            EditApplier._sync_constitution_to_skill(rules)
             return True
 
         return False
+
+    @staticmethod
+    def _sync_constitution_to_skill(rules: list[str]) -> bool:
+        """Sync the runtime CONSTITUTION.md rules into the productivity/axiomos skill table.
+
+        Rewrites the Constitution Overview section of the AxiomOS skill
+        to match the numbered rules from CONSTITUTION.md.
+        """
+        skill_path = (
+            Path.home()
+            / ".hermes"
+            / "skills"
+            / "productivity"
+            / "axiomos"
+            / "SKILL.md"
+        )
+        if not skill_path.exists():
+            return False
+
+        text = skill_path.read_text()
+        marker_start = "| LAW-"
+        lines = text.split("\n")
+
+        # Find the constitution table boundaries
+        table_start = None
+        table_end = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("| LAW-"):
+                if table_start is None:
+                    table_start = i
+                table_end = i
+
+        if table_start is None or table_end is None:
+            return False
+
+        # Build new table rows
+        import re
+        rule_strip = re.compile(r"^\d+\.\s*")
+        new_rows = []
+        for i, rule in enumerate(rules):
+            num = i + 1
+            stripped = rule_strip.sub("", rule).strip()
+            # Extract the short title (before the first dash or colon)
+            title_match = re.match(r'^(.*?)[—:\-]', stripped)
+            title = title_match.group(1).strip() if title_match else f"Rule {num}"
+            description = stripped
+            new_rows.append(f"| LAW-{num:04d} | {title} | {description} |")
+
+        # Replace the entire table section (from table_start to table_end)
+        pre = lines[:table_start]
+        post = lines[table_end + 1:]
+        # Add header row if first line isn't already the table header
+        header_lines = [
+            "| Rule | Name | Description |",
+            "|------|------|-------------|",
+        ]
+        updated_text = "\n".join(pre + header_lines + new_rows + post)
+
+        skill_path.write_text(updated_text)
+        return True
 
     @staticmethod
     def _apply_config(edit: BoundedEdit) -> bool:
@@ -928,13 +1079,26 @@ class EditApplier:
 
     @staticmethod
     def _apply_skill(edit: BoundedEdit) -> bool:
-        """Apply edits to the axiomos-ef SKILL.md."""
+        """Apply edits to a Hermes skill document.
+
+        Uses edit.location to determine which skill:
+          - "skill:axiomos"     → productivity/axiomos/SKILL.md
+          - "skill:axiomos-ef"  → software-development/axiomos-ef/SKILL.md
+          - default             → axiom-os EF skill (backwards compat)
+        """
+        skill_name = "axiomos-ef"
+        loc = (edit.location or "").strip()
+        if loc.startswith("skill:"):
+            skill_name = loc.replace("skill:", "").strip()
         skill_path = (
             Path.home()
             / ".hermes"
             / "skills"
-            / "software-development"
-            / "axiomos-ef"
+            / (
+                "productivity/axiomos"
+                if skill_name == "axiomos"
+                else "software-development/axiomos-ef"
+            )
             / "SKILL.md"
         )
         if not skill_path.exists():
